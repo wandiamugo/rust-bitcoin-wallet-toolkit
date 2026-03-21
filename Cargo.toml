@@ -1,0 +1,8 @@
+[package]
+name = "rust-bitcoin-wallet-toolkit"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitcoin = "0.31"
+rand = "0.8"
