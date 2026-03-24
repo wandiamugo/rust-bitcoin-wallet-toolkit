@@ -433,7 +433,6 @@ IMPORTS — Rust's `use` is like Python's `import` or JS's `import { } from`
 → The trait that gives OsRng its fill_bytes() method.
 → Traits in Rust are like interfaces — you must import them to use their methods.
 
----
 
 ENTRY POINT
 
@@ -601,7 +600,290 @@ it borrows (&) and what it returns (->). Reading a function signature tells
 you the entire ownership story without reading the body.
 
 
-## Prompt #4 — *(coming next)*
+## Prompt #4 — Understanding Verification
+**Date:** 21st March 2026  
+**Technique:** Section 1.4 - Understanding Verification (Moringa AI Module)
+
+**Prompt Used:**
+> "I've written this Rust Bitcoin wallet program: [pasted full main.rs code]
+> Could you:
+> 1. Verify if I've followed Rust best practices?
+> 2. Explain any improvements I should make?
+> 3. Point out any Python/JS habits that might be showing in my Rust code?
+> 4. Suggest what I should learn next for Bitcoin development in Rust?"
+
+**AI Full Response:**
+
+Overall Verdict: Solid First Rust
+
+Your code compiles clean, runs correctly, uses the right crate APIs, and shows
+you've genuinely absorbed the ownership concepts — borrowing with & in all the
+right places, immutability by default, no unnecessary clones. For a first Rust
+program this is good work. There are no bugs. The issues below are about
+graduating from "correct" to "idiomatic."
+
+
+Issue 1: Secp256k1 is recreated on every call — the main real problem
+
+Your code:
+```rust
+fn derive_public_key(secret_key: &SecretKey) -> PublicKey {
+    let secp = Secp256k1::new();  // ← created inside the function
+    ...
+}
+```
+
+Secp256k1::new() isn't a cheap operation — it allocates and precomputes lookup
+tables used by the elliptic curve math. Creating it once per key derivation is
+wasteful. In a wallet generating hundreds of addresses (HD wallets do this),
+it adds up fast.
+
+The fix — create it once in main and pass it in:
+```rust
+fn main() {
+    let secp = Secp256k1::new();  // created once
+    let mut rng = OsRng;
+
+    let secret_key = generate_private_key(&mut rng);
+    let public_key = derive_public_key(&secp, &secret_key);  // passed in
+    ...
+}
+
+fn derive_public_key(
+    secp: &Secp256k1<bitcoin::secp256k1::All>,
+    secret_key: &SecretKey,
+) -> PublicKey {
+    let inner = bitcoin::secp256k1::PublicKey::from_secret_key(secp, secret_key);
+    PublicKey { compressed: true, inner }
+}
+```
+
+This is a Python/JS habit showing through — in those languages you don't think
+about construction cost because the runtime handles it. Rust makes you think
+about when things are built and how often.
+
+---
+
+Issue 2: .expect() everywhere — a Python/JS exception habit
+
+Your code:
+```rust
+SecretKey::from_slice(&key_bytes)
+    .expect("Failed to create secret key")
+```
+
+.expect() is a panic — the entire program crashes with no recovery. It's fine
+for learning and for truly unrecoverable situations, but it's the Rust equivalent
+of this Python:
+```python
+try:
+    key = SecretKey.from_slice(key_bytes)
+except Exception:
+    raise SystemExit("Failed")  # just crash, no recovery possible
+```
+
+In production wallet code you'd use Result propagation with the ? operator:
+```rust
+// Functions that can fail return Result
+fn generate_private_key(rng: &mut OsRng) -> Result<SecretKey, bitcoin::secp256k1::Error> {
+    let mut key_bytes = [0u8; 32];
+    rng.fill_bytes(&mut key_bytes);
+    SecretKey::from_slice(&key_bytes)  // ? would propagate the error up
+}
+
+// main() handles it at the top level
+fn main() {
+    match generate_private_key(&mut rng) {
+        Ok(key)  => { /* use it */ }
+        Err(e)   => { eprintln!("Key generation failed: {}", e); }
+    }
+}
+```
+
+The ? operator is the idiomatic way to propagate errors — it's the next
+significant concept to learn after ownership.
+
+---
+
+Issue 3: rng is created inside the function that doesn't need to own it
+
+Your code:
+```rust
+fn generate_private_key() -> SecretKey {
+    let mut rng = OsRng;  // ← created here, thrown away when function ends
+    ...
+}
+```
+
+OsRng is a handle to the OS random number generator. Creating and discarding it
+per call isn't catastrophic (it's lightweight), but it signals the same habit as
+Issue 1 — creating resources inside functions that could be shared. The idiomatic
+approach passes it in:
+```rust
+fn generate_private_key(rng: &mut OsRng) -> SecretKey {
+    ...
+}
+```
+
+This also makes the function easier to test — in tests you can swap in a
+deterministic RNG instead of the real OS one.
+
+---
+
+Issue 4: The hex conversion — correct but not the most idiomatic
+
+Your code:
+```rust
+let private_key_hex: String = secret_key
+    .secret_bytes()
+    .iter()
+    .map(|b| format!("{:02x}", b))
+    .collect();
+```
+
+This works and is readable. The more idiomatic Rust would use the hex crate or
+the bitcoin crate's built-in hex display — but since you don't have those as
+dependencies yet, your version is perfectly reasonable. It's not a habit to
+break, just something to know exists.
+
+
+What You Did Well — specifically
+
+These are things beginners consistently get wrong, and you got right:
+
+- Borrowing correctly in main: Passing &secret_key and &public_key rather than
+  moving them. You clearly understood why — you needed to use them after the
+  function calls.
+- No unnecessary .clone(): A common beginner reflex when fighting the borrow
+  checker is to clone everything. You didn't. Clean.
+- Immutability by default: You only used let mut where actually needed (rng,
+  key_bytes). Every other binding is correctly immutable.
+- Correct compressed key format: PublicKey { compressed: true, ... } — you knew
+  to set this. Uncompressed keys are a legacy footgun.
+- OsRng not thread_rng: Using the cryptographically secure RNG for key material
+  rather than the faster-but-not-crypto-safe alternative. This matters enormously
+  for Bitcoin.
+
+---
+
+The Improved Version:
+```rust
+use bitcoin::secp256k1::{Secp256k1, SecretKey};
+use bitcoin::{Address, Network, PublicKey};
+use rand::rngs::OsRng;
+use rand::RngCore;
+
+fn main() {
+    println!("=== Bitcoin Testnet Wallet Generator ===\n");
+
+    // Created once — passed to any function that needs it
+    let secp = Secp256k1::new();
+    let mut rng = OsRng;
+
+    let secret_key = generate_private_key(&mut rng);
+    let public_key = derive_public_key(&secp, &secret_key);
+    let address    = derive_address(&public_key);
+
+    let private_key_hex: String = secret_key
+        .secret_bytes()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+
+    println!("Private Key (hex) : {}", private_key_hex);
+    println!("Public Key        : {}", public_key);
+    println!("Testnet Address   : {}", address);
+    println!("\n⚠️  Never share your private key. This is testnet — no real funds.");
+}
+
+fn generate_private_key(rng: &mut OsRng) -> SecretKey {
+    let mut key_bytes = [0u8; 32];
+    rng.fill_bytes(&mut key_bytes);
+    SecretKey::from_slice(&key_bytes)
+        .expect("Failed to create secret key")
+}
+
+fn derive_public_key(
+    secp: &Secp256k1<bitcoin::secp256k1::All>,
+    secret_key: &SecretKey,
+) -> PublicKey {
+    let inner = bitcoin::secp256k1::PublicKey::from_secret_key(secp, secret_key);
+    PublicKey { compressed: true, inner }
+}
+
+fn derive_address(public_key: &PublicKey) -> Address {
+    Address::p2pkh(public_key, Network::Testnet)
+}
+```
+
+The changes are minimal: secp and rng created in main and passed in.
+Everything else stays the same.
+
+---
+
+What to Learn Next, in Order:
+
+1. The ? operator and Result propagation — your immediate next step. Replace
+   .expect() calls with proper error handling. This is the single biggest gap
+   between your current code and production-quality Rust.
+
+2. BIP-39 mnemonics — add the bip39 crate. Instead of a raw 32-byte private key,
+   generate a 12-word seed phrase. This is how every real wallet works and it'll
+   teach you more about Rust's type system through a concrete Bitcoin concept.
+
+3. BIP-32 HD key derivation — use Xpriv and DerivationPath (already in the
+   bitcoin crate). Derive multiple addresses from one seed using paths like
+   m/44'/0'/0'/0/0. This is what makes a wallet a wallet rather than just a
+   key generator.
+
+4. Structs with impl — wrap your current functions into a Wallet struct with
+   methods. This is where Rust's struct/trait system becomes real and you'll
+   see how it differs from Python classes.
+
+5. Writing tests — Rust has first-class test support built into the language
+   with #[test]. For Bitcoin code, tests are essential. You'll learn how to
+   pass a deterministic RNG in tests to get reproducible keys.
+
+The path from here to a real HD wallet is shorter than it looks — you've already
+understood the hardest conceptual parts.
+
+**AI Response Summary:**
+The AI gave the code an overall verdict of "Solid First Rust" — compiles clean,
+correct ownership and borrowing throughout, no unnecessary clones, right RNG
+choice. Three improvements were identified:
+
+1. Secp256k1::new() was being recreated inside derive_public_key() on every
+   call — wasteful because it precomputes elliptic curve lookup tables. Fix:
+   create it once in main() and pass it in as &secp. This was identified as
+   a Python/JS habit — those languages hide construction costs behind the runtime.
+
+2. .expect() everywhere is the Rust equivalent of crashing with no recovery —
+   fine for learning but not for production. The next step is replacing it with
+   the ? operator and proper Result propagation throughout the call chain.
+
+3. OsRng was being created inside generate_private_key() and thrown away —
+   same pattern as Issue 1. Fix: create it in main() and pass as &mut rng.
+   This also makes the function easier to test with a deterministic RNG.
+
+What the AI confirmed was done correctly:
+- Borrowing with & in all the right places
+- No unnecessary .clone() calls
+- let mut only where actually needed
+- compressed: true on the public key
+- OsRng instead of thread_rng for cryptographic key material
+
+**Helpfulness Evaluation:**
+Extremely helpful — the AI didn't just say "good job." It identified real
+performance and idiomatic issues, explained WHY they are issues, connected
+them back to Python/JS habits, and gave a concrete learning roadmap. The
+distinction between "correct" and "idiomatic" Rust is exactly the gap a
+beginner needs to understand.
+
+**Key Takeaway:**
+Correct Rust and idiomatic Rust are different things. The three issues found
+— Secp256k1 recreation, .expect() overuse, and rng scoping — all trace back
+to the same Python/JS habit: not thinking about when and how often resources
+are created. Rust makes you think about this explicitly.
 
 ---
 
