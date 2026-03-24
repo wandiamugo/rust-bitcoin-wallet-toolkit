@@ -887,4 +887,165 @@ are created. Rust makes you think about this explicitly.
 
 ---
 
-## Prompt #5 — *(coming next)*
+## Prompt #5 — Learning Through Teaching
+**Date:** 21st March 2026  
+**Technique:** Section 2.3 - Learning Through Teaching (Moringa AI Module)
+
+**Prompt Used:**
+> "I've just built a Bitcoin testnet wallet CLI in Rust as a beginner coming
+> from Python and JavaScript. Let me explain what I learned and you tell me
+> what I'm getting right, what I'm missing, and what I'm misunderstanding:
+>
+> Here's how I would explain Rust to another Python/JS developer:
+>
+> Rust is a systems programming language that catches bugs at compile time
+> instead of runtime. The most important concept is ownership — every value
+> has exactly one owner, and when that owner goes out of scope the memory is
+> freed automatically, no garbage collector needed. You can temporarily lend
+> values using borrowing — & for read-only access and &mut for write access,
+> but never both at the same time. Instead of null, Rust uses Option<T> with
+> Some and None, and instead of exceptions it uses Result<T, E> with Ok and
+> Err — both force you to handle every case explicitly. Structs replace
+> classes, and traits replace inheritance. For Bitcoin specifically, these
+> features matter because wallet bugs aren't just crashes — they're financial
+> losses, and Rust makes an entire class of those bugs impossible to write.
+>
+> What am I getting right? What am I missing or misunderstanding? What would
+> you add or correct?"
+
+**AI Full Response:**
+
+This is a strong summary. Let me go through it piece by piece — what's solid,
+what needs a small correction, and what's missing.
+
+What You're Getting Right:
+
+- The ownership explanation is accurate and well-framed. "Every value has
+  exactly one owner, and when that owner goes out of scope the memory is freed
+  automatically" is the correct mental model, stated cleanly.
+- The borrowing rules are correct. & for read-only, &mut for write access,
+  never both at the same time. That's the rule. You've absorbed it properly.
+- Option and Result framing is exactly right. Calling them things that "force
+  you to handle every case explicitly" is the key insight — it's not just that
+  they exist, it's that the compiler won't let you ignore them.
+- The Bitcoin motivation is the right reason. "Wallet bugs aren't just crashes
+  — they're financial losses" is precisely why rust-bitcoin, BDK, and LDK are
+  all written in Rust.
+- The Secp256k1 insight is real idiomatic thinking. Recognising that creating
+  it once and passing it around is better than recreating it in every function
+  — that's not a beginner observation. That's thinking about resource cost and
+  API design, which is exactly the Rust mindset.
+
+One Thing to Correct:
+
+"Traits replace inheritance" is about 70% right — but the part that's wrong
+will trip you up later. Traits don't replace inheritance entirely. They replace
+a specific use of inheritance — the part where you say "this type can do X."
+But Python inheritance does two things at once that Rust deliberately separates:
+
+- Sharing behaviour → traits handle this. If multiple types can all sign() a
+  transaction, you define a Signer trait and implement it for each type.
+- Sharing data/implementation → Rust has no mechanism for this. You instead
+  use composition — put the shared data inside your struct as a field.
+```python
+# Python — inherit data AND behaviour
+class HDWallet(BaseWallet):
+    pass  # gets all of BaseWallet's fields and methods for free
+```
+```rust
+// Rust — compose data, share behaviour through traits
+struct HDWallet {
+    base: BaseWallet,  // composition: contain it, don't inherit it
+}
+
+impl Signer for HDWallet {  // trait: declare what it can do
+    fn sign(&self, tx: &Transaction) -> Signature { ... }
+}
+```
+
+The practical consequence: when building a Wallet struct, don't reach for
+"what would I inherit here?" Reach for "what would I contain here, and what
+traits should this implement?"
+
+What's Missing:
+
+1. The ? operator — you understand Result exists, but the mechanism for working
+   with it in practice is the ? operator. It propagates errors up the call stack
+   without writing match on every single line. This is your most immediate next
+   concept.
+
+2. Lifetimes — you've learned that borrowing is temporary, but you haven't yet
+   encountered situations where the compiler needs you to explain how long a
+   borrow lasts. When a function takes two references as input and returns a
+   reference, the compiler asks: which input does the output borrow from? That's
+   where lifetime annotations like 'a appear.
+
+3. The compiler is the tool, not the enemy — in Python/JS, errors are things
+   to get past. In Rust, when the borrow checker rejects your code, the correct
+   response is "what is it seeing that I'm not?" The checker has never been
+   wrong about a genuine issue. When it fights you, your design has a problem,
+   not your syntax.
+
+4. Zero-cost abstractions — Rust is not just safe, it's also fast. Iterators,
+   closures, generics, traits — they all compile down to the same machine code
+   as hand-written C. You can write expressive high-level code and pay nothing
+   for it at runtime.
+
+The Corrected Full Explanation:
+
+Rust is a systems programming language that catches bugs at compile time instead
+of runtime. The most important concept is ownership — every value has exactly one
+owner, and when that owner goes out of scope, memory is freed automatically with
+no garbage collector needed. You can temporarily lend values using borrowing — &
+for read-only access and &mut for write access — but you can never have both at
+the same time. This makes data races impossible to write, not just unlikely.
+
+Instead of null, Rust uses Option<T> with Some and None. Instead of exceptions,
+it uses Result<T, E> with Ok and Err. Both force you to handle every case
+explicitly — the compiler won't let you ignore a potential failure. The ?
+operator is how you propagate errors up the call stack cleanly without writing
+a match on every line.
+
+Structs replace classes. Traits let you define shared behaviour across types —
+similar to interfaces in TypeScript. But unlike Python inheritance, traits don't
+share data or implementation. When you want to share data, you use composition:
+put one struct inside another as a field, rather than inheriting from it.
+
+Idiomatic Rust also means thinking about when you create things. Expensive
+resources like a Secp256k1 context should be created once and passed around by
+reference, not recreated inside every function that needs them.
+
+For Bitcoin specifically, these features matter because wallet bugs aren't just
+crashes — they're financial losses. Rust makes an entire class of those bugs
+impossible to write, and its performance means you pay no runtime cost for that
+safety.
+
+Where You Are Overall:
+
+You've correctly understood the three hardest conceptual things about Rust —
+ownership, borrowing, and why explicit error handling matters. Most people take
+weeks to genuinely absorb those. The gaps you have are things you haven't needed
+yet, not things you've misunderstood. The ? operator is your next concrete thing
+to learn. After that, try wrapping your wallet functions in a Wallet struct with
+impl methods.
+
+**AI Response Summary:**
+The AI confirmed the core explanation was accurate — ownership, borrowing rules,
+Option/Result framing, and Bitcoin motivation were all correct. One correction:
+"traits replace inheritance" is only 70% right. Traits handle shared behaviour
+but not shared data — Rust uses composition for that instead. Missing concepts
+identified: the ? operator for clean error propagation, lifetimes for explaining
+borrow duration, treating the compiler as a tool not an enemy, and zero-cost
+abstractions meaning safety has no runtime performance cost.
+
+**Helpfulness Evaluation:**
+The most valuable prompt of the project — having the AI verify my own explanation
+revealed exactly where my understanding was solid vs where it was approximate.
+The traits vs inheritance correction is a subtle but important distinction that
+would have caused confusion when building more complex structs.
+
+**Key Takeaway:**
+I correctly understood the three hardest parts of Rust — ownership, borrowing,
+and explicit error handling. The gaps are things I haven't needed yet, not things
+I've misunderstood. Next step: the ? operator, then wrapping wallet functions
+in a proper Wallet struct.
